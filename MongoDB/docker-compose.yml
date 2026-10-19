@@ -1,0 +1,68 @@
+# Giorno 2 · MongoDB — ambiente del corso
+#
+#   docker compose up -d        avvia MongoDB, carica il dataset (seed) e avvia Compass (web)
+#   docker compose ps           mongo = healthy, seed = exited (0), compass = running
+#   docker compose down -v      cancella anche i dati (poi di nuovo `up -d` per ripartire)
+#
+# Client:
+#   - Compass web (questo compose)  http://localhost:8080
+#   - Compass desktop (host)        mongodb://localhost:27018/?directConnection=true
+#   - mongosh nel container         docker compose exec mongo mongosh "mongodb://localhost:27017/shop?directConnection=true"
+#
+# Le porte sono pubblicate solo su 127.0.0.1: MongoDB gira SENZA autenticazione.
+
+name: corso-mongodb
+
+services:
+
+  mongo:
+    image: mongo:8.0.32                 # patch pinnata: mai `latest` né `8.0`
+    container_name: corso-mongo
+    # Replica set a un nodo, senza autenticazione (con --replSet + utente root servirebbe un keyFile).
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27018}:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./scripts:/scripts:ro           # setup_Fn.js, check_Fn.js, soluzioni/
+    healthcheck:
+      # Idempotente: al primo avvio inizializza il replica set; diventa healthy solo quando il nodo è PRIMARY.
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - >-
+          try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [ { _id: 0, host: 'localhost:27017' } ] }) };
+          quit(db.hello().isWritablePrimary ? 0 : 1)
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  compass:
+    # Compass in versione web: immagine della community (NON ufficiale), port del frontend di Compass.
+    # Per il Compass desktop ufficiale vedi la nota in fondo al file.
+    image: haohanyang/compass-web:0.5.1
+    container_name: corso-compass
+    ports:
+      - "127.0.0.1:${COMPASS_PORT:-8080}:8080"
+    environment:
+      CW_HOST: "0.0.0.0"
+      CW_PORT: "8080"
+      CW_APP_NAME: "Compass · corso MongoDB"
+      # Il nodo si registra come localhost:27017: senza directConnection=true il driver cercherebbe quell'indirizzo
+      # dall'interno del container compass e non troverebbe nulla.
+      CW_MONGO_URI: "mongodb://corso-mongo:27017/?directConnection=true"
+      CW_ENABLE_SHELL: "true"           # shell integrata (mongosh)
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+
+# Nota sul Compass desktop: non esiste un'immagine Docker ufficiale. Si installa sull'host e si collega a
+# mongodb://localhost:27018/?directConnection=true (la porta si cambia con MONGO_PORT, vedi sopra).

@@ -1,0 +1,87 @@
+# ==========================================================================
+# Ambiente del corso PostgreSQL — Giorno 1 (una istanza per partecipante)
+#
+# Avvio:        docker compose up -d
+# Stato:        docker compose ps              (deve diventare "healthy")
+# DBeaver Web:  http://localhost:8978          (primo avvio: crea l'utente admin)
+# Reset:        docker compose down -v && docker compose up -d   (ELIMINA i dati)
+#
+# Dopo l'avvio, in DBeaver Web crea una connessione PostgreSQL con:
+#   Host: db   Porta: 5432   Database: corso   Utente: postgres   Password: corso
+# (si usa il nome del servizio "db", non "localhost": i due container sono
+# sulla stessa rete Docker interna)
+#
+# Poi apri dump_corso.sql (Drivers/SQL Editor → carica file) ed eseguilo
+# per intero: popola il database su cui lavoreremo tutto il giorno.
+# ==========================================================================
+name: corso-postgresql
+
+services:
+  db:
+    # Tag pinnato alla minor testata. Verificare che esista con `docker compose pull`
+    # prima del corso; se non esiste più, usare la minor 18.x più recente disponibile.
+    image: postgres:18.1
+    container_name: corso-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-corso}
+      POSTGRES_DB: ${POSTGRES_DB:-corso}
+    ports:
+      # Porta non standard sull'host: evita conflitti con un PostgreSQL già installato.
+      # Non necessaria per DBeaver Web (che si collega via rete interna "db:5432"),
+      # utile solo per psql/pgAdmin dal proprio PC o per pgbench da terminale.
+      - "${PG_PORT:-5433}:5432"
+    volumes:
+      # Volume NOMINATO: sopravvive a "docker compose restart/stop"; si perde solo con "down -v".
+      # Dalla 18 l'immagine usa /var/lib/postgresql come volume (PGDATA in una sottocartella versionata).
+      - pgdata:/var/lib/postgresql
+      - ./:/scripts:ro          # dump_corso.sql e demo/*.sql visibili anche dentro il container
+    # /dev/shm di default è 64 MB: troppo poco per le query parallele (hash join paralleli, ecc.)
+    shm_size: 256mb
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=100
+      -c max_parallel_workers_per_gather=2
+      -c jit=off
+      -c random_page_cost=4
+      -c autovacuum_naptime=10s
+      -c track_io_timing=on
+      -c log_lock_waits=on
+      -c deadlock_timeout=1s
+    # shared_preload_libraries NON è impostato: lo si abilita dal vivo nella demo
+    # pg_stat_statements (demo_08_pg_stat_statements.sql). Fallback per chi resta
+    # indietro: docker compose -f docker-compose.yml -f docker-compose.pg_stat.yml up -d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks: [corso]
+
+  dbeaver:
+    # DBeaver Web (CloudBeaver): interfaccia SQL raggiungibile dal browser, nessuna
+    # installazione sul PC del partecipante. Alternativa al client desktop DBeaver.
+    image: dbeaver/cloudbeaver:latest
+    container_name: corso-dbeaver
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${DBEAVER_PORT:-8978}:8978"
+    volumes:
+      - dbeaver-data:/opt/cloudbeaver/workspace   # conserva connessioni e utenti tra un riavvio e l'altro
+    networks: [corso]
+
+networks:
+  corso:
+
+volumes:
+  pgdata:
+  dbeaver-data:
